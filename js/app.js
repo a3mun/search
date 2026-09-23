@@ -1,21 +1,24 @@
 /* ============================================================
-   Search of Sky — App Logic (UI) with Service Worker + Welcome
+   Search of Sky — App Logic (UI)
+   v2.2 — پنل مدیریت فایل‌ها + انتخاب همه + حذف تکی
    ============================================================ */
 
 (function() {
     'use strict';
     
     const state = {
-        files: [],
-        folderName: "",
+        files: [],                    // فایل‌های فعال (فیلترشده)
+        allFiles: [],                 // همه‌ی فایل‌های لود‌شده
+        selectedFileNames: new Set(), // نام فایل‌های انتخاب‌شده
+        sourceName: "",
+        sourceType: "",               // "folder" | "files" | ""
         results: [],
         isSearching: false,
         theme: "dark",
         lastQuery: "",
-        currentFileIndex: 0,
         worker: null,
         deferredPrompt: null,
-        isFirstVisit: false,
+        filePanelOpen: false,
     };
     
     const $ = (id) => document.getElementById(id);
@@ -29,12 +32,31 @@
         cancelBtn: $("cancelBtn"),
         clearBtn: $("clearBtn"),
         folderBtn: $("folderBtn"),
+        filesBtn: $("filesBtn"),
         searchInput: $("searchInput"),
         clearInputBtn: $("clearInputBtn"),
         wholeWordCheck: $("wholeWordCheck"),
         maxResults: $("maxResults"),
-        folderPath: $("folderPath"),
+        
+        // Source info
+        sourceInfoBtn: $("sourceInfoBtn"),
+        sourceIcon: $("sourceIcon"),
+        sourceText: $("sourceText"),
+        sourceBadge: $("sourceBadge"),
+        sourceArrow: $("sourceArrow"),
+        
+        // File panel
+        filePanel: $("filePanel"),
+        selectAllCheck: $("selectAllCheck"),
+        filePanelCount: $("filePanelCount"),
+        clearFilesBtn: $("clearFilesBtn"),
+        fileSearchInput: $("fileSearchInput"),
+        clearFileSearchBtn: $("clearFileSearchBtn"),
+        fileList: $("fileList"),
+        
         folderInput: $("folderInput"),
+        filesInput: $("filesInput"),
+        
         progressSection: $("progressSection"),
         progressText: $("progressText"),
         progressPercent: $("progressPercent"),
@@ -72,17 +94,22 @@
             .replace(/'/g, "&#39;");
     }
     
-    // ✅ Haptic Feedback (لرزش خفیف)
     function haptic(pattern) {
         if (navigator.vibrate) {
-            try {
-                navigator.vibrate(pattern || 10);
-            } catch (e) {}
+            try { navigator.vibrate(pattern || 10); } catch (e) {}
         }
     }
     
+    function isReadableFile(file) {
+        const name = (file.name || "").toLowerCase();
+        for (const ext of SS_CORE.FAST_EXTENSIONS) {
+            if (name.endsWith(ext)) return true;
+        }
+        return false;
+    }
+    
     // ═══════════════════════════════════════════════════════
-    //  Splash Screen
+    //  Splash
     // ═══════════════════════════════════════════════════════
     
     function hideSplash() {
@@ -141,76 +168,316 @@
     }
     
     // ═══════════════════════════════════════════════════════
-    //  Welcome Screen
+    //  Welcome
     // ═══════════════════════════════════════════════════════
     
-    function showWelcome() {
-        el.welcomeModal.classList.add("active");
-    }
-    
+    function showWelcome() { el.welcomeModal.classList.add("active"); }
     function closeWelcome() {
         el.welcomeModal.classList.remove("active");
         try { localStorage.setItem("ss-visited", "1"); } catch (e) {}
     }
-    
     function checkFirstVisit() {
         let visited = false;
         try { visited = localStorage.getItem("ss-visited") === "1"; } catch (e) {}
-        
-        if (!visited) {
-            setTimeout(showWelcome, 1500);
-        }
+        if (!visited) setTimeout(showWelcome, 1500);
     }
     
     // ═══════════════════════════════════════════════════════
-    //  Folder Selection
+    //  Source Selection — Folder
     // ═══════════════════════════════════════════════════════
     
-    function chooseFolder() { 
+    function chooseFolder() {
         haptic(10);
-        el.folderInput.click(); 
+        el.folderInput.click();
     }
     
     function onFolderSelected(event) {
-        const files = Array.from(event.target.files || []);
-        if (!files.length) return;
+        const allFiles = Array.from(event.target.files || []);
+        if (!allFiles.length) return;
         
-        const readable = files.filter(f => {
-            const name = f.name.toLowerCase();
-            for (const ext of SS_CORE.FAST_EXTENSIONS) {
-                if (name.endsWith(ext)) return true;
-            }
-            return false;
-        });
+        const readable = allFiles.filter(isReadableFile);
         
-        state.files = readable;
-        
-        if (files[0].webkitRelativePath) {
-            const parts = files[0].webkitRelativePath.split("/");
-            state.folderName = parts.slice(0, -1).join("/") || parts[0];
-        } else {
-            state.folderName = "(پوشه)";
+        if (readable.length === 0) {
+            showToast("هیچ فایل قابل جستجویی پیدا نشد", "warning");
+            haptic([20, 50, 20]);
+            setTimeout(() => { el.folderInput.value = ""; }, 100);
+            return;
         }
         
-        el.folderPath.textContent = `${state.folderName} — ${readable.length} فایل`;
-        el.statusBar.textContent = `${readable.length} فایل آماده جستجو`;
+        state.allFiles = readable;
+        state.files = readable.slice();
+        state.selectedFileNames = new Set(readable.map(f => f.name));
+        state.sourceType = "folder";
         
-        // ✅ ذخیره توی localStorage
-        try { localStorage.setItem("ss-folder", state.folderName); } catch (e) {}
+        if (allFiles[0].webkitRelativePath) {
+            const parts = allFiles[0].webkitRelativePath.split("/");
+            state.sourceName = parts.slice(0, -1).join("/") || parts[0];
+        } else {
+            state.sourceName = "(پوشه)";
+        }
         
+        updateSourceUI();
         haptic([10, 30, 10]);
+        showToast(`${readable.length} فایل بارگذاری شد`, "success");
         
-        if (readable.length === 0) showToast("هیچ فایل قابل جستجویی پیدا نشد", "warning");
-        else showToast(`${readable.length} فایل بارگذاری شد`, "success");
-        
-        // ✅ بستن پاک کردن input (برای انتخاب دوباره‌ی همون پوشه)
         setTimeout(() => { el.folderInput.value = ""; }, 100);
-        
         clearResults();
     }
     
     // ═══════════════════════════════════════════════════════
-    //  Search with Worker
+    //  Source Selection — Files
+    // ═══════════════════════════════════════════════════════
+    
+    function chooseFiles() {
+        haptic(10);
+        el.filesInput.click();
+    }
+    
+    function onFilesSelected(event) {
+        const allFiles = Array.from(event.target.files || []);
+        if (!allFiles.length) return;
+        
+        const readable = allFiles.filter(isReadableFile);
+        
+        if (readable.length === 0) {
+            showToast("هیچ فایل قابل جستجویی پیدا نشد", "warning");
+            haptic([20, 50, 20]);
+            setTimeout(() => { el.filesInput.value = ""; }, 100);
+            return;
+        }
+        
+        state.allFiles = readable;
+        state.files = readable.slice();
+        state.selectedFileNames = new Set(readable.map(f => f.name));
+        state.sourceType = "files";
+        state.sourceName = `${readable.length} فایل`;
+        
+        updateSourceUI();
+        haptic([10, 30, 10]);
+        showToast(`${readable.length} فایل بارگذاری شد`, "success");
+        
+        setTimeout(() => { el.filesInput.value = ""; }, 100);
+        clearResults();
+    }
+    
+    // ═══════════════════════════════════════════════════════
+    //  Source UI Update
+    // ═══════════════════════════════════════════════════════
+    
+    function updateSourceUI() {
+        const total = state.allFiles.length;
+        const selected = state.selectedFileNames.size;
+        
+        if (total === 0) {
+            el.sourceInfoBtn.classList.remove("has-source", "expanded");
+            el.sourceIcon.textContent = "📭";
+            el.sourceText.textContent = "هیچ منبعی انتخاب نشده";
+            el.sourceBadge.style.display = "none";
+            el.sourceArrow.style.display = "none";
+            el.filePanel.style.display = "none";
+            state.filePanelOpen = false;
+            el.statusBar.textContent = "آماده";
+            return;
+        }
+        
+        el.sourceInfoBtn.classList.add("has-source");
+        el.sourceIcon.textContent = state.sourceType === "folder" ? "📁" : "📄";
+        el.sourceText.textContent = state.sourceName;
+        el.sourceBadge.style.display = "inline-block";
+        el.sourceBadge.textContent = `${selected}/${total}`;
+        el.sourceArrow.style.display = "inline-block";
+        
+        el.statusBar.textContent = `${selected} از ${total} فایل فعال`;
+        
+        // اگه پنل باز بود، دوباره رندر کن
+        if (state.filePanelOpen) {
+            renderFileList(el.fileSearchInput.value);
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════════
+    //  File Panel Toggle
+    // ═══════════════════════════════════════════════════════
+    
+    function toggleFilePanel() {
+        if (state.allFiles.length === 0) {
+            showToast("اول یه پوشه یا فایل انتخاب کن", "warning");
+            haptic([20, 50, 20]);
+            return;
+        }
+        
+        haptic(10);
+        state.filePanelOpen = !state.filePanelOpen;
+        
+        if (state.filePanelOpen) {
+            el.filePanel.style.display = "block";
+            el.sourceInfoBtn.classList.add("expanded");
+            renderFileList(el.fileSearchInput.value);
+        } else {
+            el.filePanel.style.display = "none";
+            el.sourceInfoBtn.classList.remove("expanded");
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════════
+    //  File List Render
+    // ═══════════════════════════════════════════════════════
+    
+    function renderFileList(filter) {
+        const q = (filter || "").trim().toLowerCase();
+        
+        let files = state.allFiles;
+        if (q) {
+            files = files.filter(f => {
+                const name = f.name.toLowerCase();
+                const path = (f.webkitRelativePath || "").toLowerCase();
+                return name.indexOf(q) !== -1 || path.indexOf(q) !== -1;
+            });
+        }
+        
+        // شمارنده
+        const total = state.allFiles.length;
+        const selected = state.selectedFileNames.size;
+        el.filePanelCount.textContent = `${selected} / ${total}`;
+        
+        // انتخاب همه
+        el.selectAllCheck.checked = (selected === total && total > 0);
+        el.selectAllCheck.indeterminate = (selected > 0 && selected < total);
+        
+        // اگه فایلی نبود
+        if (files.length === 0) {
+            el.fileList.innerHTML = `<div class="file-empty">هیچ فایلی مطابقت نداشت</div>`;
+            return;
+        }
+        
+        // محدودیت ۲۰۰ فایل در نمایش
+        const display = files.slice(0, 200);
+        
+        el.fileList.innerHTML = display.map(f => {
+            const path = f.webkitRelativePath || f.name;
+            const isSelected = state.selectedFileNames.has(f.name);
+            return `
+                <div class="file-item${isSelected ? ' selected' : ''}" data-file="${escapeHtml(f.name)}">
+                    <input type="checkbox" ${isSelected ? 'checked' : ''}>
+                    <span class="file-name" title="${escapeHtml(path)}">${escapeHtml(path)}</span>
+                    <button class="file-remove" type="button" title="حذف">✕</button>
+                </div>
+            `;
+        }).join("");
+        
+        if (files.length > 200) {
+            el.fileList.innerHTML += `<div class="file-empty">... و ${files.length - 200} فایل دیگر</div>`;
+        }
+        
+        // رویدادها
+        el.fileList.querySelectorAll(".file-item").forEach(item => {
+            const name = item.dataset.file;
+            if (!name) return;
+            
+            const checkbox = item.querySelector("input[type='checkbox']");
+            const removeBtn = item.querySelector(".file-remove");
+            
+            // کلیک روی ردیف → toggle
+            item.addEventListener("click", (e) => {
+                if (e.target === removeBtn) return;
+                if (e.target === checkbox) return;
+                toggleFileSelection(name);
+            });
+            
+            // checkbox تغییر
+            if (checkbox) {
+                checkbox.addEventListener("change", (e) => {
+                    e.stopPropagation();
+                    toggleFileSelection(name);
+                });
+            }
+            
+            // حذف تکی
+            if (removeBtn) {
+                removeBtn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    removeFileCompletely(name);
+                });
+            }
+        });
+    }
+    
+    function toggleFileSelection(name) {
+        haptic(5);
+        if (state.selectedFileNames.has(name)) {
+            state.selectedFileNames.delete(name);
+        } else {
+            state.selectedFileNames.add(name);
+        }
+        updateSelectedFiles();
+        renderFileList(el.fileSearchInput.value);
+        updateSourceUI();
+    }
+    
+    function removeFileCompletely(name) {
+        haptic(15);
+        // حذف از همه جا
+        state.allFiles = state.allFiles.filter(f => f.name !== name);
+        state.selectedFileNames.delete(name);
+        updateSelectedFiles();
+        
+        if (state.allFiles.length === 0) {
+            // اگه همه حذف شدن
+            state.sourceType = "";
+            state.sourceName = "";
+            updateSourceUI();
+            clearResults();
+            showToast("همه فایل‌ها حذف شدن", "warning");
+        } else {
+            renderFileList(el.fileSearchInput.value);
+            updateSourceUI();
+        }
+    }
+    
+    function updateSelectedFiles() {
+        state.files = state.allFiles.filter(f => state.selectedFileNames.has(f.name));
+    }
+    
+    // ═══════════════════════════════════════════════════════
+    //  Select All / Clear All
+    // ═══════════════════════════════════════════════════════
+    
+    function handleSelectAll() {
+        haptic(10);
+        const total = state.allFiles.length;
+        const selected = state.selectedFileNames.size;
+        const allSelected = (selected === total && total > 0);
+        
+        if (allSelected) {
+            // همه رو غیرفعال کن
+            state.selectedFileNames.clear();
+        } else {
+            // همه رو فعال کن
+            state.selectedFileNames = new Set(state.allFiles.map(f => f.name));
+        }
+        
+        updateSelectedFiles();
+        renderFileList(el.fileSearchInput.value);
+        updateSourceUI();
+    }
+    
+    function handleClearFiles() {
+        haptic([20, 30, 20]);
+        state.allFiles = [];
+        state.selectedFileNames.clear();
+        state.files = [];
+        state.sourceType = "";
+        state.sourceName = "";
+        state.filePanelOpen = false;
+        el.filePanel.style.display = "none";
+        el.fileSearchInput.value = "";
+        updateSourceUI();
+        clearResults();
+        showToast("همه فایل‌ها حذف شدن", "warning");
+    }
+    
+    // ═══════════════════════════════════════════════════════
+    //  Search
     // ═══════════════════════════════════════════════════════
     
     function doSearch() {
@@ -228,7 +495,7 @@
         
         if (state.files.length === 0) {
             haptic([20, 50, 20]);
-            showToast("لطفاً اول یه پوشه انتخاب کن", "warning");
+            showToast("لطفاً اول یه پوشه یا فایل انتخاب کن", "warning");
             return;
         }
         
@@ -237,7 +504,6 @@
         state.isSearching = true;
         state.lastQuery = query;
         state.results = [];
-        state.currentFileIndex = 0;
         
         const wholeWord = el.wholeWordCheck.checked;
         let maxResults = parseInt(el.maxResults.value, 10);
@@ -304,7 +570,6 @@
                 
                 if (toAdd.length > 0) {
                     appendResults(toAdd);
-                    // ✅ Haptic کوچیک موقع اضافه شدن نتیجه
                     if (toAdd.length >= 50) haptic(5);
                 }
                 
@@ -313,12 +578,10 @@
                 
             } else if (msg.type === "fileDone") {
                 state._currentWorkerIndex++;
-                
                 if (state.worker) {
                     state.worker.terminate();
                     state.worker = null;
                 }
-                
                 runNextWorker();
                 
             } else if (msg.type === "error") {
@@ -392,7 +655,7 @@
     }
     
     // ═══════════════════════════════════════════════════════
-    //  Render Results (Live)
+    //  Render Results
     // ═══════════════════════════════════════════════════════
     
     function appendResults(newResults) {
@@ -480,7 +743,7 @@
     function clearResults() {
         state.results = [];
         clearResultsList();
-        showEmptyState("آماده برای جستجو", "یک پوشه انتخاب کن و عبارت مورد نظر رو تایپ کن");
+        showEmptyState("آماده برای جستجو", "یک پوشه یا فایل انتخاب کن و عبارت مورد نظر رو تایپ کن");
     }
     
     // ═══════════════════════════════════════════════════════
@@ -633,33 +896,31 @@
         el.searchInput.focus();
     }
     
+    function clearFileSearch() {
+        haptic(5);
+        el.fileSearchInput.value = "";
+        renderFileList("");
+        el.fileSearchInput.focus();
+    }
+    
     // ═══════════════════════════════════════════════════════
-    //  Service Worker Registration
+    //  Service Worker
     // ═══════════════════════════════════════════════════════
     
     async function registerServiceWorker() {
-        if (!("serviceWorker" in navigator)) {
-            console.log("⚠️ Service Worker پشتیبانی نمی‌شه");
-            return;
-        }
-        
+        if (!("serviceWorker" in navigator)) return;
         try {
             const reg = await navigator.serviceWorker.register("service-worker.js", {
                 scope: "./"
             });
             console.log("✅ Service Worker ثبت شد:", reg.scope);
-            
-            // بررسی به‌روزرسانی
-            reg.addEventListener("updatefound", () => {
-                console.log("🔄 به‌روزرسانی Service Worker...");
-            });
         } catch (e) {
             console.error("❌ خطا در ثبت Service Worker:", e);
         }
     }
     
     // ═══════════════════════════════════════════════════════
-    //  PWA Install Prompt
+    //  PWA Install
     // ═══════════════════════════════════════════════════════
     
     window.addEventListener("beforeinstallprompt", (e) => {
@@ -701,10 +962,26 @@
         el.cancelBtn.addEventListener("click", cancelSearch);
         el.clearBtn.addEventListener("click", clearAll);
         el.folderBtn.addEventListener("click", chooseFolder);
+        el.filesBtn.addEventListener("click", chooseFiles);
         el.folderInput.addEventListener("change", onFolderSelected);
+        el.filesInput.addEventListener("change", onFilesSelected);
         el.clearInputBtn.addEventListener("click", clearInput);
+        el.clearFileSearchBtn.addEventListener("click", clearFileSearch);
         el.copyAllBtn.addEventListener("click", copyAll);
         
+        // Source info toggle
+        el.sourceInfoBtn.addEventListener("click", toggleFilePanel);
+        
+        // Select all / clear all
+        el.selectAllCheck.addEventListener("change", handleSelectAll);
+        el.clearFilesBtn.addEventListener("click", handleClearFiles);
+        
+        // File search
+        el.fileSearchInput.addEventListener("input", (e) => {
+            renderFileList(e.target.value);
+        });
+        
+        // Search input
         el.searchInput.addEventListener("keydown", (e) => {
             if (e.key === "Enter") {
                 e.preventDefault();
@@ -712,6 +989,7 @@
             }
         });
         
+        // Modal
         el.modalCloseBtn.addEventListener("click", closeModal);
         el.modalCloseBtn2.addEventListener("click", closeModal);
         el.modalCopyBtn.addEventListener("click", copyModalContent);
@@ -721,7 +999,7 @@
             if (e.target === el.viewModal) closeModal();
         });
         
-        // Welcome modal
+        // Welcome
         el.welcomeCloseBtn.addEventListener("click", closeWelcome);
         el.welcomeCloseBtn2.addEventListener("click", closeWelcome);
         el.welcomeStartBtn.addEventListener("click", closeWelcome);
@@ -736,7 +1014,6 @@
                 closeModal();
                 if (el.welcomeModal.classList.contains("active")) closeWelcome();
             }
-            // Ctrl+F → focus input
             if ((e.ctrlKey || e.metaKey) && e.key === "f") {
                 e.preventDefault();
                 el.searchInput.focus();
@@ -744,11 +1021,9 @@
             }
         });
         
-        // Back button برای modal (اندروید)
+        // Back button برای modal
         window.addEventListener("popstate", () => {
-            if (el.viewModal.classList.contains("active")) {
-                closeModal();
-            }
+            if (el.viewModal.classList.contains("active")) closeModal();
         });
     }
     
@@ -761,16 +1036,11 @@
         bindEvents();
         el.statusBar.textContent = "آماده";
         
-        // Service Worker
         registerServiceWorker();
-        
-        // Splash
         hideSplash();
-        
-        // Welcome (بار اول)
         checkFirstVisit();
         
-        console.log("✅ Search of Sky PWA initialized");
+        console.log("✅ Search of Sky PWA initialized (v2.2)");
     }
     
     if (document.readyState === "loading") {

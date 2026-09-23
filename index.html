@@ -44,7 +44,7 @@
 
     <!-- Search Card -->
     <section class="search-card">
-        <!-- ردیف ۱: دکمه جستجو + نوار + دکمه پاک -->
+        <!-- ردیف ۱: جستجو + نوار + پاک -->
         <div class="search-row">
             <button id="searchBtn" class="btn btn-accent">جستجو</button>
             <button id="cancelBtn" class="btn btn-danger" style="display:none">⛔ لغو</button>
@@ -72,13 +72,45 @@
             </label>
         </div>
         
-        <!-- ردیف ۳: دکمه پوشه + مسیر -->
-        <div class="folder-row">
-            <button id="folderBtn" class="btn btn-folder">📂 انتخاب پوشه</button>
-            <span class="folder-path" id="folderPath">هیچ پوشه‌ای انتخاب نشده</span>
+        <!-- ردیف ۳: دکمه‌های منبع + نوار اطلاعات -->
+        <div class="source-row">
+            <button id="folderBtn" class="btn btn-folder">📂 پوشه</button>
+            <button id="filesBtn" class="btn btn-files">📄 فایل</button>
+            <button id="sourceInfoBtn" class="source-info-btn" type="button">
+                <span class="source-info-icon" id="sourceIcon">📭</span>
+                <span class="source-info-text" id="sourceText">هیچ منبعی انتخاب نشده</span>
+                <span class="source-info-badge" id="sourceBadge" style="display:none">0</span>
+                <span class="source-info-arrow" id="sourceArrow" style="display:none">▼</span>
+            </button>
+        </div>
+
+        <!-- ✅ پنل مدیریت فایل‌ها -->
+        <div class="file-panel" id="filePanel" style="display:none">
+            <!-- نوار ابزار -->
+            <div class="file-panel-toolbar">
+                <label class="file-select-all">
+                    <input type="checkbox" id="selectAllCheck">
+                    <span>انتخاب همه</span>
+                </label>
+                <span class="file-panel-count" id="filePanelCount">0 / 0</span>
+                <button class="file-clear-btn" id="clearFilesBtn" type="button">🗑 حذف همه</button>
+            </div>
+
+            <!-- جستجوی نام فایل -->
+            <div class="file-search-input-wrap">
+                <span class="search-icon">🔍</span>
+                <input type="text" id="fileSearchInput" class="file-search-input"
+                       placeholder="جستجوی نام فایل..."
+                       autocomplete="off" autocorrect="off" spellcheck="false">
+                <button id="clearFileSearchBtn" class="icon-btn-small" type="button">✕</button>
+            </div>
+
+            <!-- لیست فایل‌ها -->
+            <div class="file-list" id="fileList"></div>
         </div>
         
         <input type="file" id="folderInput" webkitdirectory directory multiple style="display:none">
+        <input type="file" id="filesInput" multiple accept=".txt,.log,.nfo,.text,.csv,.tsv,.tab,.json,.xml,.yaml,.yml,.htm,.html,.xhtml,.md,.rst,.ini,.cfg,.conf,.sql,.dat,.rtf" style="display:none">
     </section>
 
     <!-- Progress -->
@@ -104,14 +136,14 @@
         <div class="empty-state" id="emptyState">
             <div class="empty-icon">🔍</div>
             <div class="empty-text">آماده برای جستجو</div>
-            <div class="empty-hint">یک پوشه انتخاب کن و عبارت مورد نظر رو تایپ کن</div>
+            <div class="empty-hint">یک پوشه یا فایل انتخاب کن و عبارت مورد نظر رو تایپ کن</div>
         </div>
     </section>
 
     <!-- Status Bar -->
     <footer class="status-bar" id="statusBar">آماده</footer>
 
-    <!-- Modal -->
+    <!-- Modal (View) -->
     <div class="modal" id="viewModal">
         <div class="modal-content">
             <div class="modal-header">
@@ -142,8 +174,8 @@
                 <div class="welcome-step">
                     <div class="welcome-icon">📂</div>
                     <div class="welcome-info">
-                        <h4>انتخاب پوشه</h4>
-                        <p>با زدن دکمه «📂 انتخاب پوشه» پوشه‌ی <code>DATA</code> رو از گوشی انتخاب کن. همه‌ی زیرپوشه‌ها خودکار لود می‌شن.</p>
+                        <h4>انتخاب منبع</h4>
+                        <p>می‌تونی <strong>پوشه</strong> انتخاب کنی (همه‌ی زیرپوشه‌ها لود می‌شن) یا فقط <strong>چند فایل خاص</strong> رو مستقیم انتخاب کنی.</p>
                     </div>
                 </div>
 
@@ -191,6 +223,8 @@
                             <li>✅ نتایج <strong>زنده</strong> نمایش داده می‌شن</li>
                             <li>✅ می‌تونی نتیجه رو <strong>کپی یا Share</strong> کنی</li>
                             <li>✅ <strong>🔗 لینک تلگرام</strong> کاربران مستقیم باز می‌شه</li>
+                            <li>✅ <strong>HTML Tables</strong> به‌صورت جدول پارس می‌شن</li>
+                            <li>✅ توی پنل فایل‌ها می‌تونی فایل‌ها رو <strong>حذف یا فیلتر</strong> کنی</li>
                         </ul>
                     </div>
                 </div>
