@@ -1,17 +1,17 @@
 /* ============================================================
    Search of Sky — App Logic (UI)
-   v2.5 — افزودن showDirectoryPicker برای اندروید
+   v2.2 — پنل مدیریت فایل‌ها + انتخاب همه + حذف تکی
    ============================================================ */
 
 (function() {
     'use strict';
     
     const state = {
-        files: [],
-        allFiles: [],
-        selectedFileNames: new Set(),
+        files: [],                    // فایل‌های فعال (فیلترشده)
+        allFiles: [],                 // همه‌ی فایل‌های لود‌شده
+        selectedFileNames: new Set(), // نام فایل‌های انتخاب‌شده
         sourceName: "",
-        sourceType: "",
+        sourceType: "",               // "folder" | "files" | ""
         results: [],
         isSearching: false,
         theme: "dark",
@@ -19,7 +19,6 @@
         worker: null,
         deferredPrompt: null,
         filePanelOpen: false,
-        dirHandle: null, // ✅ جدید: نگه‌داشتن handle پوشه
     };
     
     const $ = (id) => document.getElementById(id);
@@ -38,11 +37,15 @@
         clearInputBtn: $("clearInputBtn"),
         wholeWordCheck: $("wholeWordCheck"),
         maxResults: $("maxResults"),
+        
+        // Source info
         sourceInfoBtn: $("sourceInfoBtn"),
         sourceIcon: $("sourceIcon"),
         sourceText: $("sourceText"),
         sourceBadge: $("sourceBadge"),
         sourceArrow: $("sourceArrow"),
+        
+        // File panel
         filePanel: $("filePanel"),
         selectAllCheck: $("selectAllCheck"),
         filePanelCount: $("filePanelCount"),
@@ -50,8 +53,10 @@
         fileSearchInput: $("fileSearchInput"),
         clearFileSearchBtn: $("clearFileSearchBtn"),
         fileList: $("fileList"),
+        
         folderInput: $("folderInput"),
         filesInput: $("filesInput"),
+        
         progressSection: $("progressSection"),
         progressText: $("progressText"),
         progressPercent: $("progressPercent"),
@@ -101,11 +106,6 @@
             if (name.endsWith(ext)) return true;
         }
         return false;
-    }
-    
-    // ✅ پشتیبانی از showDirectoryPicker
-    function supportsDirectoryPicker() {
-        return typeof window.showDirectoryPicker === "function";
     }
     
     // ═══════════════════════════════════════════════════════
@@ -183,118 +183,14 @@
     }
     
     // ═══════════════════════════════════════════════════════
-    //  ✅ پیمایش بازگشتی پوشه با File System Access API
-    // ═══════════════════════════════════════════════════════
-    
-    /**
-     * از یه DirectoryHandle، همه‌ی فایل‌های قابل خواندن رو به صورت بازگشتی استخراج می‌کنه
-     * @param {FileSystemDirectoryHandle} dirHandle
-     * @param {string} pathPrefix - پیشوند مسیر برای نمایش
-     * @returns {Promise<Array<{file: File, path: string}>>}
-     */
-    async function collectFilesFromDirectory(dirHandle, pathPrefix) {
-        pathPrefix = pathPrefix || "";
-        const collected = [];
-        
-        try {
-            for await (const entry of dirHandle.values()) {
-                if (entry.kind === "file") {
-                    // فایل → چک کن قابل خواندنه
-                    if (isReadableFile({ name: entry.name })) {
-                        try {
-                            const file = await entry.getFile();
-                            // یه پراپرتی مجازی برای مسیر اضافه کن
-                            const virtualPath = pathPrefix ? `${pathPrefix}/${entry.name}` : entry.name;
-                            collected.push({ file, path: virtualPath });
-                        } catch (err) {
-                            console.warn("خطا در خواندن فایل:", entry.name, err);
-                        }
-                    }
-                } else if (entry.kind === "directory") {
-                    // زیرپوشه → بازگشتی
-                    const subPath = pathPrefix ? `${pathPrefix}/${entry.name}` : entry.name;
-                    try {
-                        const subFiles = await collectFilesFromDirectory(entry, subPath);
-                        collected.push(...subFiles);
-                    } catch (err) {
-                        console.warn("خطا در پیمایش زیرپوشه:", entry.name, err);
-                    }
-                }
-            }
-        } catch (err) {
-            console.error("خطا در پیمایش پوشه:", err);
-        }
-        
-        return collected;
-    }
-    
-    // ═══════════════════════════════════════════════════════
     //  Source Selection — Folder
     // ═══════════════════════════════════════════════════════
     
-    async function chooseFolder() {
+    function chooseFolder() {
         haptic(10);
-        
-        // ✅ اگه showDirectoryPicker پشتیبانی می‌شه
-        if (supportsDirectoryPicker()) {
-            try {
-                const dirHandle = await window.showDirectoryPicker({
-                    mode: "read",
-                });
-                
-                showToast("در حال خواندن پوشه...", "info");
-                
-                const entries = await collectFilesFromDirectory(dirHandle, "");
-                
-                if (entries.length === 0) {
-                    showToast("هیچ فایل قابل جستجویی پیدا نشد", "warning");
-                    haptic([20, 50, 20]);
-                    return;
-                }
-                
-                // ✅ فایل‌ها رو با یه پراپرتی مجازی path ست کن
-                const files = entries.map(({ file, path }) => {
-                    // یه defineProperty برای webkitRelativePath مجازی
-                    try {
-                        Object.defineProperty(file, "webkitRelativePath", {
-                            value: path,
-                            writable: false,
-                            configurable: true,
-                        });
-                    } catch (e) {
-                        // اگه نشد، ignore کن
-                    }
-                    return file;
-                });
-                
-                state.dirHandle = dirHandle;
-                state.allFiles = files;
-                state.files = files.slice();
-                state.selectedFileNames = new Set(files.map(f => f.name));
-                state.sourceType = "folder";
-                state.sourceName = dirHandle.name;
-                
-                updateSourceUI();
-                haptic([10, 30, 10]);
-                showToast(`${files.length} فایل بارگذاری شد`, "success");
-                clearResults();
-                
-            } catch (err) {
-                if (err.name === "AbortError") {
-                    // کاربر لغو کرد
-                    return;
-                }
-                console.error("خطا در showDirectoryPicker:", err);
-                showToast("خطا در انتخاب پوشه، از دکمه‌ی فایل استفاده کن", "warning");
-                haptic([20, 50, 20]);
-            }
-        } else {
-            // ✅ fallback به روش قدیمی
-            el.folderInput.click();
-        }
+        el.folderInput.click();
     }
     
-    // روش قدیمی (برای مرورگرهای بدون showDirectoryPicker)
     function onFolderSelected(event) {
         const allFiles = Array.from(event.target.files || []);
         if (!allFiles.length) return;
@@ -308,7 +204,6 @@
             return;
         }
         
-        state.dirHandle = null;
         state.allFiles = readable;
         state.files = readable.slice();
         state.selectedFileNames = new Set(readable.map(f => f.name));
@@ -351,7 +246,6 @@
             return;
         }
         
-        state.dirHandle = null;
         state.allFiles = readable;
         state.files = readable.slice();
         state.selectedFileNames = new Set(readable.map(f => f.name));
@@ -395,6 +289,7 @@
         
         el.statusBar.textContent = `${selected} از ${total} فایل فعال`;
         
+        // اگه پنل باز بود، دوباره رندر کن
         if (state.filePanelOpen) {
             renderFileList(el.fileSearchInput.value);
         }
@@ -440,18 +335,22 @@
             });
         }
         
+        // شمارنده
         const total = state.allFiles.length;
         const selected = state.selectedFileNames.size;
         el.filePanelCount.textContent = `${selected} / ${total}`;
         
+        // انتخاب همه
         el.selectAllCheck.checked = (selected === total && total > 0);
         el.selectAllCheck.indeterminate = (selected > 0 && selected < total);
         
+        // اگه فایلی نبود
         if (files.length === 0) {
             el.fileList.innerHTML = `<div class="file-empty">هیچ فایلی مطابقت نداشت</div>`;
             return;
         }
         
+        // محدودیت ۲۰۰ فایل در نمایش
         const display = files.slice(0, 200);
         
         el.fileList.innerHTML = display.map(f => {
@@ -470,6 +369,7 @@
             el.fileList.innerHTML += `<div class="file-empty">... و ${files.length - 200} فایل دیگر</div>`;
         }
         
+        // رویدادها
         el.fileList.querySelectorAll(".file-item").forEach(item => {
             const name = item.dataset.file;
             if (!name) return;
@@ -477,12 +377,14 @@
             const checkbox = item.querySelector("input[type='checkbox']");
             const removeBtn = item.querySelector(".file-remove");
             
+            // کلیک روی ردیف → toggle
             item.addEventListener("click", (e) => {
                 if (e.target === removeBtn) return;
                 if (e.target === checkbox) return;
                 toggleFileSelection(name);
             });
             
+            // checkbox تغییر
             if (checkbox) {
                 checkbox.addEventListener("change", (e) => {
                     e.stopPropagation();
@@ -490,6 +392,7 @@
                 });
             }
             
+            // حذف تکی
             if (removeBtn) {
                 removeBtn.addEventListener("click", (e) => {
                     e.stopPropagation();
@@ -513,14 +416,15 @@
     
     function removeFileCompletely(name) {
         haptic(15);
+        // حذف از همه جا
         state.allFiles = state.allFiles.filter(f => f.name !== name);
         state.selectedFileNames.delete(name);
         updateSelectedFiles();
         
         if (state.allFiles.length === 0) {
+            // اگه همه حذف شدن
             state.sourceType = "";
             state.sourceName = "";
-            state.dirHandle = null;
             updateSourceUI();
             clearResults();
             showToast("همه فایل‌ها حذف شدن", "warning");
@@ -545,8 +449,10 @@
         const allSelected = (selected === total && total > 0);
         
         if (allSelected) {
+            // همه رو غیرفعال کن
             state.selectedFileNames.clear();
         } else {
+            // همه رو فعال کن
             state.selectedFileNames = new Set(state.allFiles.map(f => f.name));
         }
         
@@ -562,7 +468,6 @@
         state.files = [];
         state.sourceType = "";
         state.sourceName = "";
-        state.dirHandle = null;
         state.filePanelOpen = false;
         el.filePanel.style.display = "none";
         el.fileSearchInput.value = "";
@@ -1064,15 +969,19 @@
         el.clearFileSearchBtn.addEventListener("click", clearFileSearch);
         el.copyAllBtn.addEventListener("click", copyAll);
         
+        // Source info toggle
         el.sourceInfoBtn.addEventListener("click", toggleFilePanel);
         
+        // Select all / clear all
         el.selectAllCheck.addEventListener("change", handleSelectAll);
         el.clearFilesBtn.addEventListener("click", handleClearFiles);
         
+        // File search
         el.fileSearchInput.addEventListener("input", (e) => {
             renderFileList(e.target.value);
         });
         
+        // Search input
         el.searchInput.addEventListener("keydown", (e) => {
             if (e.key === "Enter") {
                 e.preventDefault();
@@ -1080,6 +989,7 @@
             }
         });
         
+        // Modal
         el.modalCloseBtn.addEventListener("click", closeModal);
         el.modalCloseBtn2.addEventListener("click", closeModal);
         el.modalCopyBtn.addEventListener("click", copyModalContent);
@@ -1089,6 +999,7 @@
             if (e.target === el.viewModal) closeModal();
         });
         
+        // Welcome
         el.welcomeCloseBtn.addEventListener("click", closeWelcome);
         el.welcomeCloseBtn2.addEventListener("click", closeWelcome);
         el.welcomeStartBtn.addEventListener("click", closeWelcome);
@@ -1097,6 +1008,7 @@
             if (e.target === el.welcomeModal) closeWelcome();
         });
         
+        // Keyboard shortcuts
         document.addEventListener("keydown", (e) => {
             if (e.key === "Escape") {
                 closeModal();
@@ -1109,6 +1021,7 @@
             }
         });
         
+        // Back button برای modal
         window.addEventListener("popstate", () => {
             if (el.viewModal.classList.contains("active")) closeModal();
         });
@@ -1127,9 +1040,7 @@
         hideSplash();
         checkFirstVisit();
         
-        // ✅ لاگ وضعیت پشتیبانی
-        console.log("✅ Search of Sky PWA initialized (v2.5)");
-        console.log("📁 showDirectoryPicker supported:", supportsDirectoryPicker());
+        console.log("✅ Search of Sky PWA initialized (v2.2)");
     }
     
     if (document.readyState === "loading") {
